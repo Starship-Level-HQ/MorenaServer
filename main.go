@@ -19,7 +19,6 @@ type PlayerState struct {
 	DirectionX string  `json:"directionX"`
 	DirectionY string  `json:"directionY"`
 	Health     int     `json:"health"`
-	IsDashing  bool    `json:"isDashing"`
 }
 
 type Client struct {
