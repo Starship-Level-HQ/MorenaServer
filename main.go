@@ -3,15 +3,28 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const bufferSize = 1024 * 16
 
-type PlayerState struct {
+type Enemy struct {
+	Id         int     `json:"id"`
+	X          float32 `json:"x"`
+	Y          float32 `json:"y"`
+	Xv         float32 `json:"xv"`
+	Yv         float32 `json:"yv"`
+	DirectionX string  `json:"directionX"`
+	DirectionY string  `json:"directionY"`
+	Health     int     `json:"health"`
+}
+
+type Player struct {
 	X          float32 `json:"x"`
 	Y          float32 `json:"y"`
 	Xv         float32 `json:"xv"`
@@ -26,9 +39,10 @@ type Client struct {
 	channel string
 	id      string
 	buffer  []byte
+	host    bool
 	Port    string `json:"port"`
 	Alive   bool   `json:"alive"`
-	*PlayerState
+	*Player
 }
 
 var (
@@ -41,8 +55,10 @@ var (
 		sendOwnMessages: true,
 		verbose:         true,
 	}
-	channels = make(map[string]map[string]*Client)
-	mutex    sync.Mutex
+	channels           = make(map[string]map[string]*Client)
+	routinesPerChannel = make(map[string]bool)
+	enemiesPerChannel  = make(map[string][]*Enemy)
+	mutex              sync.Mutex
 )
 
 func main() {
@@ -67,7 +83,7 @@ func main() {
 			buffer: make([]byte, bufferSize),
 			Port:   strconv.Itoa(conn.RemoteAddr().(*net.TCPAddr).Port),
 			Alive:  true,
-			PlayerState: &PlayerState{
+			Player: &Player{
 				X:          300,
 				Y:          300,
 				Xv:         300,
@@ -87,7 +103,7 @@ func handleConnection(client *Client) {
 	for client.Alive {
 		n, err := client.conn.Read(client.buffer) // некоторые данные могут остаться в буфере TCP соединения, если не поместятся
 		if err != nil {
-			fmt.Println("Client disconnected:", client.id) // TODO очистить буфер после выхода
+			fmt.Println("Client disconnected:", client.id)
 			client.Alive = false
 
 			// определяем начальное состояние
@@ -123,6 +139,12 @@ func processMessage(message string, client *Client) {
 				channels[channelName] = make(map[string]*Client)
 			}
 			channels[channelName][client.id] = client
+
+			if !routinesPerChannel[channelName] {
+				routinesPerChannel[channelName] = true
+				client.host = true
+				go enemyRoutine(channelName, client)
+			}
 			mutex.Unlock()
 
 			// определяем начальное состояние
@@ -137,18 +159,18 @@ func processMessage(message string, client *Client) {
 
 			// состояние всех остальных игроков отправляется новому
 			mutex.Lock()
-			for _, currClient := range channels[client.channel] {
-				if currClient == client {
+			for _, otherClient := range channels[client.channel] {
+				if otherClient == client {
 					continue
 				}
-				if currClient.Alive {
-					jsonCurrClient, err := json.Marshal(currClient)
+				if otherClient.Alive {
+					jsonOtherClient, err := json.Marshal(otherClient)
 					if err != nil {
 						fmt.Println("Error encoding JSON:", err)
 						return
 					}
-					fmt.Println("JSON CLIENT: ", string(jsonCurrClient))
-					client.conn.Write([]byte("__JSON__START__" + string(jsonCurrClient) + "__JSON__END__"))
+					fmt.Println("JSON CLIENT: ", string(jsonOtherClient))
+					client.conn.Write([]byte("__JSON__START__" + string(jsonOtherClient) + "__JSON__END__"))
 				}
 			}
 			mutex.Unlock()
@@ -164,29 +186,83 @@ func processMessage(message string, client *Client) {
 		if start != -1 && end != -1 && end > start {
 			jsonMessage := message[start:end]
 
-			var state PlayerState
-			err := json.Unmarshal([]byte(jsonMessage), &state)
+			var newState Player
+			err := json.Unmarshal([]byte(jsonMessage), &newState)
 			if err != nil {
 				fmt.Println("Error decoding JSON:", err)
 				return
 			}
 
-			client.PlayerState = &PlayerState{
-				X:          state.X,
-				Y:          state.Y,
-				Xv:         state.Xv,
-				Yv:         state.Yv,
-				DirectionX: state.DirectionX,
-				DirectionY: state.DirectionY,
-				Health:     state.Health,
+			client.Player = &Player{
+				X:          newState.X,
+				Y:          newState.Y,
+				Xv:         newState.Xv,
+				Yv:         newState.Yv,
+				DirectionX: newState.DirectionX,
+				DirectionY: newState.DirectionY,
+				Health:     newState.Health,
 			}
-			// fmt.Println(client.GameState)
+
 			jsonClient, err := json.Marshal(client)
 			if err != nil {
 				fmt.Println("Error encoding JSON:", err)
 				return
 			}
 			broadcastMessage(string(jsonClient), client)
+		}
+	} else if strings.Contains(message, "__JSON__ENEMY__START__") && client.host {
+		start := strings.Index(message, "__JSON__ENEMY__START__") + len("__JSON__ENEMY__START__")
+		end := strings.Index(message, "__JSON__ENEMY__END__")
+		if start != -1 && end != -1 && end > start {
+			jsonMessage := message[start:end]
+
+			var enemies []Enemy
+			err := json.Unmarshal([]byte(jsonMessage), &enemies)
+			if err != nil {
+				fmt.Println("Error decoding enemies JSON:", err)
+				return
+			}
+
+			mutex.Lock()
+			// Обновляем врагов
+			for _, newEnemy := range enemies {
+				for i, existingEnemy := range enemiesPerChannel[client.channel] {
+					if existingEnemy.Id == newEnemy.Id {
+						// Обновляем параметры врага
+						existingEnemy.X = newEnemy.X
+						existingEnemy.Y = newEnemy.Y
+						existingEnemy.Xv = newEnemy.Xv
+						existingEnemy.Yv = newEnemy.Yv
+						existingEnemy.DirectionX = newEnemy.DirectionX
+						existingEnemy.DirectionY = newEnemy.DirectionY
+						existingEnemy.Health = newEnemy.Health
+
+						// Если здоровье меньше или равно 0, удаляем врага из списка
+						if existingEnemy.Health <= 0 {
+							// Удаляем врага из среза
+							enemiesPerChannel[client.channel] = append(
+								enemiesPerChannel[client.channel][:i],
+								enemiesPerChannel[client.channel][i+1:]...,
+							)
+						}
+						break
+					}
+				}
+			}
+			mutex.Unlock()
+
+			jsonEnemies, err := json.Marshal(enemiesPerChannel[client.channel])
+			if err != nil {
+				fmt.Println("Error encoding enemies JSON:", err)
+				return
+			}
+
+			// передаем всем игрокам новое состояние врагов
+			mutex.Lock()
+			for _, anotherClient := range channels[client.channel] {
+				anotherClient.conn.Write([]byte("__JSON__ENEMY__START__" + string(jsonEnemies) + "__JSON__ENEMY__END__"))
+			}
+			mutex.Unlock()
 		}
 	}
 }
@@ -200,5 +276,49 @@ func broadcastMessage(jsonMessage string, sender *Client) {
 			continue
 		}
 		client.conn.Write([]byte("__JSON__START__" + string(jsonMessage) + "__JSON__END__"))
+	}
+}
+
+func enemyRoutine(channelName string, hostClient *Client) {
+	for hostClient.Alive {
+		mutex.Lock()
+
+		enemies := enemiesPerChannel[channelName]
+
+		// создаем врагов
+		if len(enemies) < 5 {
+			newEnemy := generateEnemy()
+			enemiesPerChannel[channelName] = append(enemies, newEnemy)
+			fmt.Printf("Создан новый враг в канале %s: %+v\n", channelName, newEnemy)
+
+			enemyData, err := json.Marshal(newEnemy)
+			if err != nil {
+				fmt.Println("Error encoding enemy JSON:", err)
+			}
+			broadcastMessage("__ADDENEMY__START__"+string(enemyData)+"__ADDENEMY__END__", hostClient)
+		}
+
+		mutex.Unlock()
+
+		time.Sleep(5 * time.Second)
+	}
+
+	// останавливаем горутину
+	mutex.Lock()
+	routinesPerChannel[channelName] = false
+	hostClient.host = false
+	mutex.Unlock()
+}
+
+func generateEnemy() *Enemy {
+	return &Enemy{
+		Id:         rand.Intn(1000),
+		X:          float32(rand.Intn(500)),
+		Y:          float32(rand.Intn(500)),
+		Xv:         0,
+		Yv:         0,
+		DirectionX: "",
+		DirectionY: "",
+		Health:     100,
 	}
 }
