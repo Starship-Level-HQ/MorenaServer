@@ -12,6 +12,7 @@ import (
 )
 
 const bufferSize = 1024 * 16
+const EnemiesNumber = 2
 
 type Enemy struct {
 	Id         int     `json:"id"`
@@ -39,9 +40,9 @@ type Client struct {
 	channel string
 	id      string
 	buffer  []byte
-	host    bool
 	Port    string `json:"port"`
 	Alive   bool   `json:"alive"`
+	Host    bool   `json:"host"`
 	*Player
 }
 
@@ -145,7 +146,7 @@ func processMessage(message string, client *Client) {
 
 			if !routinesPerChannel[channelName] {
 				routinesPerChannel[channelName] = true
-				client.host = true
+				client.Host = true
 				go enemyRoutine(channelName, client)
 			} else {
 				for _, enemy := range enemiesPerChannel[channelName] {
@@ -221,7 +222,7 @@ func processMessage(message string, client *Client) {
 			}
 			broadcastMessage(string(jsonClient), client)
 		}
-	} else if strings.Contains(message, "__JSON__ENEMY__START__") && client.host {
+	} else if strings.Contains(message, "__JSON__ENEMY__START__") && client.Host {
 		start := strings.Index(message, "__JSON__ENEMY__START__") + len("__JSON__ENEMY__START__")
 		end := strings.Index(message, "__JSON__ENEMY__END__")
 		if start != -1 && end != -1 && end > start {
@@ -233,7 +234,7 @@ func processMessage(message string, client *Client) {
 				fmt.Println("Error decoding enemies JSON:", err)
 				return
 			}
-
+			fmt.Println("ENEMIES JSON:", enemies)
 			mutex.Lock()
 			// Обновляем врагов
 			for _, newEnemy := range enemies {
@@ -297,7 +298,7 @@ func enemyRoutine(channelName string, hostClient *Client) {
 		enemies := enemiesPerChannel[channelName]
 
 		// создаем врагов
-		if len(enemies) < 5 {
+		if len(enemies) < EnemiesNumber {
 			newEnemy := generateEnemy(channelName)
 			enemiesPerChannel[channelName] = append(enemies, newEnemy)
 			fmt.Printf("New enemy in channel %s: %+v\n", channelName, newEnemy)
@@ -353,9 +354,9 @@ func removeClient(client *Client) {
 		delete(channelClients, client.id)
 
 		// Если клиент был хостом, переназначаем нового хоста
-		if client.host && len(channelClients) > 0 {
+		if client.Host && len(channelClients) > 0 {
 			for _, nextClient := range channelClients {
-				nextClient.host = true
+				nextClient.Host = true
 				if cfg.verbose {
 					fmt.Printf("New host for channel %s is client %s.\n", client.channel, nextClient.id)
 				}
