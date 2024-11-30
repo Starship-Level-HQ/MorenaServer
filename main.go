@@ -116,6 +116,9 @@ func handleConnection(client *Client) {
 			// говорим всем что игрок отключился
 			broadcastMessage(string(jsonClient), client)
 
+			// Удаляем клиента
+			removeClient(client)
+
 			break
 		}
 
@@ -144,6 +147,14 @@ func processMessage(message string, client *Client) {
 				routinesPerChannel[channelName] = true
 				client.host = true
 				go enemyRoutine(channelName, client)
+			} else {
+				for _, enemy := range enemiesPerChannel[channelName] {
+					enemyJson, err := json.Marshal(enemy)
+					if err != nil {
+						fmt.Println("Error encoding enemy JSON:", err)
+					}
+					client.conn.Write([]byte("__ADDENEMY__START__" + string(enemyJson) + "__ADDENEMY__END__"))
+				}
 			}
 			mutex.Unlock()
 
@@ -287,38 +298,84 @@ func enemyRoutine(channelName string, hostClient *Client) {
 
 		// создаем врагов
 		if len(enemies) < 5 {
-			newEnemy := generateEnemy()
+			newEnemy := generateEnemy(channelName)
 			enemiesPerChannel[channelName] = append(enemies, newEnemy)
-			fmt.Printf("Создан новый враг в канале %s: %+v\n", channelName, newEnemy)
+			fmt.Printf("New enemy in channel %s: %+v\n", channelName, newEnemy)
 
-			enemyData, err := json.Marshal(newEnemy)
+			enemyJson, err := json.Marshal(newEnemy)
 			if err != nil {
 				fmt.Println("Error encoding enemy JSON:", err)
 			}
-			broadcastMessage("__ADDENEMY__START__"+string(enemyData)+"__ADDENEMY__END__", hostClient)
+
+			for _, client := range channels[hostClient.channel] {
+				client.conn.Write([]byte("__ADDENEMY__START__" + string(enemyJson) + "__ADDENEMY__END__"))
+			}
 		}
 
 		mutex.Unlock()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
-
-	// останавливаем горутину
-	mutex.Lock()
-	routinesPerChannel[channelName] = false
-	hostClient.host = false
-	mutex.Unlock()
 }
 
-func generateEnemy() *Enemy {
+func generateEnemy(channelName string) *Enemy {
+	usedIds := make(map[int]bool)
+	for _, enemy := range enemiesPerChannel[channelName] {
+		usedIds[enemy.Id] = true
+	}
+
+	var tempId int
+	for {
+		tempId = rand.Intn(1000)
+		if !usedIds[tempId] {
+			break
+		}
+	}
+
 	return &Enemy{
-		Id:         rand.Intn(1000),
-		X:          float32(rand.Intn(500)),
-		Y:          float32(rand.Intn(500)),
+		Id:         tempId,
+		X:          float32(100 + rand.Intn(500)),
+		Y:          float32(100 + rand.Intn(500)),
 		Xv:         0,
 		Yv:         0,
 		DirectionX: "",
 		DirectionY: "",
 		Health:     100,
+	}
+}
+
+func removeClient(client *Client) {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	// Удаляем клиента из его канала
+	if channelClients, exists := channels[client.channel]; exists {
+		delete(channelClients, client.id)
+
+		// Если клиент был хостом, переназначаем нового хоста
+		if client.host && len(channelClients) > 0 {
+			for _, nextClient := range channelClients {
+				nextClient.host = true
+				if cfg.verbose {
+					fmt.Printf("New host for channel %s is client %s.\n", client.channel, nextClient.id)
+				}
+				break // Назначаем первому найденному клиенту
+			}
+		}
+
+		// Если канал пуст, очищаем врагов и фоновые задачи
+		if len(channelClients) == 0 {
+			delete(enemiesPerChannel, client.channel)
+			delete(routinesPerChannel, client.channel)
+			delete(channels, client.channel)
+			if cfg.verbose {
+				fmt.Printf("Channel %s is now empty and has been cleaned up.\n", client.channel)
+			}
+		}
+	}
+
+	// Дополнительное логирование для отладки
+	if cfg.verbose {
+		fmt.Printf("Client %s removed from channel %s.\n", client.id, client.channel)
 	}
 }
