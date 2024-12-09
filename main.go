@@ -15,14 +15,14 @@ const bufferSize = 1024 * 16
 const EnemiesNumber = 1
 
 type Enemy struct {
-	Id         int     `json:"id"`
-	X          float32 `json:"x"`
-	Y          float32 `json:"y"`
-	Xv         float32 `json:"xv"`
-	Yv         float32 `json:"yv"`
-	DirectionX string  `json:"directionX"`
-	DirectionY string  `json:"directionY"`
-	Health     int     `json:"health"`
+	Id        int     `json:"id"`
+	X         float32 `json:"x"`
+	Y         float32 `json:"y"`
+	Xv        float32 `json:"xv"`
+	Yv        float32 `json:"yv"`
+	Direction string  `json:"direction"`
+	Health    int     `json:"health"`
+	IsMoving  bool    `json:"isMoving"`
 }
 
 type Shot struct {
@@ -289,9 +289,9 @@ func processMessage(message string, client *Client) {
 						existingEnemy.Y = newEnemy.Y
 						existingEnemy.Xv = newEnemy.Xv
 						existingEnemy.Yv = newEnemy.Yv
-						existingEnemy.DirectionX = newEnemy.DirectionX
-						existingEnemy.DirectionY = newEnemy.DirectionY
+						existingEnemy.Direction = newEnemy.Direction
 						existingEnemy.Health = newEnemy.Health
+						existingEnemy.IsMoving = newEnemy.IsMoving
 						break
 					}
 				}
@@ -338,6 +338,8 @@ func broadcastMessage(jsonMessage string, sender *Client) {
 }
 
 func enemyRoutine(channelName string, hostClient *Client) {
+	time.Sleep(3 * time.Second)
+
 	for hostClient.Alive {
 		mutex.Lock()
 
@@ -360,8 +362,7 @@ func enemyRoutine(channelName string, hostClient *Client) {
 		}
 
 		mutex.Unlock()
-
-		time.Sleep(2 * time.Second)
+		time.Sleep(3 * time.Second)
 	}
 }
 
@@ -380,14 +381,14 @@ func generateEnemy(channelName string) *Enemy {
 	}
 
 	return &Enemy{
-		Id:         tempId,
-		X:          float32(100 + rand.Intn(500)),
-		Y:          float32(100 + rand.Intn(500)),
-		Xv:         0,
-		Yv:         0,
-		DirectionX: "",
-		DirectionY: "",
-		Health:     100,
+		Id:        tempId,
+		X:         float32(100 + rand.Intn(650)),
+		Y:         float32(100 + rand.Intn(650)),
+		Xv:        0,
+		Yv:        0,
+		Direction: "",
+		Health:    100,
+		IsMoving:  false,
 	}
 }
 
