@@ -12,7 +12,7 @@ import (
 )
 
 const bufferSize = 1024 * 16
-const EnemiesNumber = 2
+const EnemiesNumber = 1
 
 type Enemy struct {
 	Id         int     `json:"id"`
@@ -23,6 +23,11 @@ type Enemy struct {
 	DirectionX string  `json:"directionX"`
 	DirectionY string  `json:"directionY"`
 	Health     int     `json:"health"`
+}
+
+type Shot struct {
+	Type              string `json:"attackType"`
+	ShotButtonPressed bool   `json:"shotButtonPressed"`
 }
 
 type Player struct {
@@ -44,6 +49,7 @@ type Client struct {
 	Alive   bool   `json:"alive"`
 	Host    bool   `json:"host"`
 	*Player
+	*Shot
 }
 
 var (
@@ -92,6 +98,10 @@ func main() {
 				DirectionX: "",
 				DirectionY: "",
 				Health:     100,
+			},
+			Shot: &Shot{
+				ShotButtonPressed: false,
+				Type:              "shoot",
 			},
 		}
 		go handleConnection(client)
@@ -220,7 +230,41 @@ func processMessage(message string, client *Client) {
 				fmt.Println("Error encoding JSON:", err)
 				return
 			}
+
 			broadcastMessage(string(jsonClient), client)
+		}
+	} else if strings.Contains(message, "__SHOOT__START__") {
+		start := strings.Index(message, "__SHOOT__START__") + len("__SHOOT__START__")
+		end := strings.Index(message, "__SHOOT__END__")
+		if start != -1 && end != -1 && end > start {
+			jsonMessage := message[start:end]
+
+			fmt.Println("jsonMessage: ", jsonMessage)
+			var shot Shot
+			err := json.Unmarshal([]byte(jsonMessage), &shot)
+			if err != nil {
+				fmt.Println("Error decoding shoots JSON:", err)
+				return
+			}
+
+			client.Shot = &Shot{
+				ShotButtonPressed: shot.ShotButtonPressed,
+				Type:              shot.Type,
+			}
+
+			jsonClient, err := json.Marshal(client)
+			if err != nil {
+				fmt.Println("Error encoding JSON:", err)
+				return
+			}
+
+			fmt.Println("SHOOT: ", shot, ";  FROM: ", client.Port)
+			// передаем всем игрокам выстрел
+			mutex.Lock()
+			for _, anotherClient := range channels[client.channel] {
+				anotherClient.conn.Write([]byte("__SHOOT__START__" + string(jsonClient) + "__SHOOT__END__"))
+			}
+			mutex.Unlock()
 		}
 	} else if strings.Contains(message, "__JSON__ENEMY__START__") && client.Host {
 		start := strings.Index(message, "__JSON__ENEMY__START__") + len("__JSON__ENEMY__START__")
@@ -238,7 +282,7 @@ func processMessage(message string, client *Client) {
 			mutex.Lock()
 			// Обновляем врагов
 			for _, newEnemy := range enemies {
-				for i, existingEnemy := range enemiesPerChannel[client.channel] {
+				for _, existingEnemy := range enemiesPerChannel[client.channel] {
 					if existingEnemy.Id == newEnemy.Id {
 						// Обновляем параметры врага
 						existingEnemy.X = newEnemy.X
@@ -248,15 +292,6 @@ func processMessage(message string, client *Client) {
 						existingEnemy.DirectionX = newEnemy.DirectionX
 						existingEnemy.DirectionY = newEnemy.DirectionY
 						existingEnemy.Health = newEnemy.Health
-
-						// Если здоровье меньше или равно 0, удаляем врага из списка
-						if existingEnemy.Health <= 0 {
-							// Удаляем врага из среза
-							enemiesPerChannel[client.channel] = append(
-								enemiesPerChannel[client.channel][:i],
-								enemiesPerChannel[client.channel][i+1:]...,
-							)
-						}
 						break
 					}
 				}
@@ -269,8 +304,19 @@ func processMessage(message string, client *Client) {
 				return
 			}
 
-			// передаем всем игрокам новое состояние врагов
 			mutex.Lock()
+			for i, existingEnemy := range enemiesPerChannel[client.channel] {
+				// Если здоровье меньше или равно 0, удаляем врага из списка
+				if existingEnemy.Health <= 0 {
+					// Удаляем врага из среза
+					enemiesPerChannel[client.channel] = append(
+						enemiesPerChannel[client.channel][:i],
+						enemiesPerChannel[client.channel][i+1:]...,
+					)
+				}
+			}
+
+			// передаем всем игрокам новое состояние врагов
 			for _, anotherClient := range channels[client.channel] {
 				anotherClient.conn.Write([]byte("__JSON__ENEMY__START__" + string(jsonEnemies) + "__JSON__ENEMY__END__"))
 			}
