@@ -41,13 +41,14 @@ type Player struct {
 }
 
 type Client struct {
-	conn    net.Conn
-	channel string
-	id      string
-	buffer  []byte
-	Port    string `json:"port"`
-	Alive   bool   `json:"alive"`
-	Host    bool   `json:"host"`
+	conn        net.Conn
+	channel     string
+	id          string
+	buffer      []byte
+	Port        string `json:"port"`
+	Alive       bool   `json:"alive"`
+	Host        bool   `json:"host"`
+	KilledScore int    `json:"killedScore"`
 	*Player
 	*Shot
 }
@@ -85,11 +86,12 @@ func main() {
 		}
 
 		client := &Client{
-			conn:   conn,
-			id:     conn.RemoteAddr().String(),
-			buffer: make([]byte, bufferSize),
-			Port:   strconv.Itoa(conn.RemoteAddr().(*net.TCPAddr).Port),
-			Alive:  true,
+			conn:        conn,
+			id:          conn.RemoteAddr().String(),
+			buffer:      make([]byte, bufferSize),
+			Port:        strconv.Itoa(conn.RemoteAddr().(*net.TCPAddr).Port),
+			Alive:       true,
+			KilledScore: 0,
 			Player: &Player{
 				X:          300,
 				Y:          300,
@@ -258,7 +260,6 @@ func processMessage(message string, client *Client) {
 				return
 			}
 
-			fmt.Println("SHOOT: ", shot, ";  FROM: ", client.Port)
 			// передаем всем игрокам выстрел
 			mutex.Lock()
 			for _, anotherClient := range channels[client.channel] {
@@ -308,6 +309,7 @@ func processMessage(message string, client *Client) {
 			for i, existingEnemy := range enemiesPerChannel[client.channel] {
 				// Если здоровье меньше или равно 0, удаляем врага из списка
 				if existingEnemy.Health <= 0 {
+					client.KilledScore += 1
 					// Удаляем врага из среза
 					enemiesPerChannel[client.channel] = append(
 						enemiesPerChannel[client.channel][:i],
@@ -386,7 +388,7 @@ func generateEnemy(channelName string) *Enemy {
 		Y:         float32(100 + rand.Intn(650)),
 		Xv:        0,
 		Yv:        0,
-		Direction: "",
+		Direction: "l",
 		Health:    100,
 		IsMoving:  false,
 	}
@@ -404,6 +406,7 @@ func removeClient(client *Client) {
 		if client.Host && len(channelClients) > 0 {
 			for _, nextClient := range channelClients {
 				nextClient.Host = true
+				nextClient.KilledScore = client.KilledScore
 				if cfg.verbose {
 					fmt.Printf("New host for channel %s is client %s.\n", client.channel, nextClient.id)
 				}
