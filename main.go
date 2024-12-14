@@ -23,6 +23,8 @@ type Enemy struct {
 	Direction string  `json:"direction"`
 	Health    int     `json:"health"`
 	IsMoving  bool    `json:"isMoving"`
+	Type      string  `json:"type"`
+	CanShoot  bool    `json:"canShoot"`
 }
 
 type Shot struct {
@@ -293,6 +295,8 @@ func processMessage(message string, client *Client) {
 						existingEnemy.Direction = newEnemy.Direction
 						existingEnemy.Health = newEnemy.Health
 						existingEnemy.IsMoving = newEnemy.IsMoving
+						existingEnemy.CanShoot = newEnemy.CanShoot
+						existingEnemy.Type = newEnemy.Type
 						break
 					}
 				}
@@ -382,6 +386,19 @@ func generateEnemy(channelName string) *Enemy {
 		}
 	}
 
+	guessType := rand.Intn(2)
+	var typeOfEnemy string
+	canShoot := false
+	if guessType == 0 {
+		typeOfEnemy = "kaban"
+	} else {
+		typeOfEnemy = "zombee"
+		guessCanShoot := rand.Intn(3)
+		if guessCanShoot == 0 {
+			canShoot = true
+		}
+	}
+
 	return &Enemy{
 		Id:        tempId,
 		X:         float32(100 + rand.Intn(650)),
@@ -391,6 +408,8 @@ func generateEnemy(channelName string) *Enemy {
 		Direction: "l",
 		Health:    100,
 		IsMoving:  false,
+		Type:      typeOfEnemy,
+		CanShoot:  canShoot,
 	}
 }
 
